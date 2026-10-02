@@ -12,7 +12,7 @@
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│                     CLI 入口 (osc-agent)                     │
+│                     CLI 入口 (nw-agent)                     │
 │        参数: --repo owner/name --issue 123                   │
 └──────────────────────────┬──────────────────────────────────┘
                            │
@@ -158,46 +158,44 @@ main_agent = create_deep_agent(
 
 方案选择：
 
-|方案|隔离级别|部署复杂度| 适用场景 |
-|---|---|---|---|
-|LocalShellBackend|	无（直接在宿主机执行）|	零	|仅本地开发调试
-|OpenSandboxBackend|Docker 容器级	|中（需本地 Docker）|	MVP 推荐
-|LangSmithSandbox|云端 VM	|高（需 API Key）	|生产部署
+| 方案                | 隔离级别         | 部署复杂度         | 适用场景 |
+|-------------------|--------------|---------------|---|
+| LocalShellBackend | 	无（直接在宿主机执行） | 	零	           |仅本地开发调试
+| E2B               | 云端	          | 高（需 API Key）  |	本地开发调试
+| LangSmithSandbox  | 云端 VM	       | 高（需 API Key）	 |生产部署
 
-OpenSandboxBackend 配置：
+E2BSandboxBackend 配置：
 
 ```python
+from e2b import Sandbox
 from deepagents import create_deep_agent
-from deepagents_opensandbox_backend import OpenSandboxBackend
+from langchain_e2b import E2BSandbox
 
-backend = OpenSandboxBackend.create(
-    api_key="你的随机密钥",  # 必须设置，否则默认无认证[citation:6]
-    use_server_proxy=True,   # Windows/Mac 需要
-)
+e2b_sandbox = Sandbox.create()
+backend = E2BSandbox(sandbox=e2b_sandbox)
 
 agent = create_deep_agent(
-    model="anthropic:claude-sonnet-4-6",
+    model=deepseek_model,
+    system_prompt="You are a Python coding assistant with sandbox access.",
     backend=backend,
-    system_prompt="你在隔离沙箱中工作。使用 execute 工具运行测试命令。",
 )
 
 try:
-    result = agent.invoke({
-        "messages": "运行 pytest tests/test_parser.py"
-    })
-    print(result["messages"][-1].content)
+    result = agent.invoke(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Create a small Python package and run pytest",
+                }
+            ]
+        }
+    )
+    for msg in result["messages"]:
+        msg.pretty_print()
+
 finally:
-    backend.kill()  # 确保沙箱销毁
-```
-
-安全警告：OpenSandbox 的默认配置极度不安全——无 API 认证、允许挂载 Docker socket、CORS 全开。在 .sandbox.toml 中必须修改：
-
-```toml
-[server]
-api_key = "生成长随机字符串"
-
-[storage]
-allowed_host_paths = ["/tmp/opensandbox-data"]  # 明确白名单
+    e2b_sandbox.kill() # 销毁沙箱
 ```
 
 安全原则：沙箱只应挂载仓库的克隆副本，绝不挂载 ~/.ssh、~/.aws、.env 文件或宿主机 Docker socket。Agent 的 execute 工具即使被 prompt injection 攻击，也最多只能破坏一个一次性的容器。
@@ -305,7 +303,7 @@ HITL 的本质：不是简单的“确认弹窗”，而是 Runtime 层面的状
 |---|---|---|------------|
 |定位	|通用自主软件工程师	|开源贡献 CLI	|定时/CI 触发的技术债清理
 |交互模式|	对话式 + 自主执行	|CLI 命令	|无头模式 + 人工审核门控
-|沙箱	|Docker 全环境	|E2B 云端	|本地 Docker（OpenSandbox）
+|沙箱	|Docker 全环境	|E2B 云端	|E2B 沙箱
 |子代理	|未明确分层	|多 Agent 但非 DeepAgent	|DeepAgent isolated 子代理
 |记忆	|无项目级持久记忆	|无	|AGENTS.md + 自动记忆积累
 |目标用户	|开发者手动使用	|开源贡献者	|CI 系统 / 团队夜间自动化
@@ -314,7 +312,7 @@ HITL 的本质：不是简单的“确认弹窗”，而是 Runtime 层面的状
 
 ## 第1周：骨架跑通
 
-搭建 create_deep_agent + 一个子代理 + OpenSandbox
+搭建 create_deep_agent + 一个子代理 + E2BSandbox
 实现最简单的任务：“给指定的函数补充 docstring”
 验证：Agent 能在沙箱中读取文件、修改、输出 diff
 ## 第2周：搜索与定位
