@@ -1,0 +1,79 @@
+# 项目元数据与工具配置（见 doc/NightWatch产品说明.md 第 5 章 P0）
+# 采用 src 布局：源码放 src/ 下，测试放 tests/，避免“测试时误导入工作目录版本”的经典坑。
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nightwatch-agents"
+version = "0.0.1"
+description = "夜间维护者：把技术债 Issue 自动变成待人工确认的 PR 草案"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+    # 运行时依赖在 P0 逐步补齐；先放已确认存在的核心包。
+    # deepagents / e2b 待验证包名后再加入（见 environment.yml 中的注释）。
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+]
+
+[project.optional-dependencies]
+sandbox = ["e2b>=1.0"]                                   # 云端沙箱后端（可选）
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]           # 开发工具
+
+[project.scripts]
+# 安装后即可用 `nw-agent ...` 调用（对应文档中的 CLI 入口）。
+nw-agent = "nw_agent.cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nw_agent"]
+
+# ---------------------------------------------------------------------------
+# ruff：lint + import 排序
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]   # pycodestyle / pyflakes / isort / pyupgrade / bugbear
+
+# ---------------------------------------------------------------------------
+# mypy：静态类型检查
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+
+# ---------------------------------------------------------------------------
+# pytest：把 src/ 加入导入路径，使测试无需先安装包即可运行
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
+# ---------------------------------------------------------------------------
+# conda-lock：环境锁定
+# ---------------------------------------------------------------------------
+# 声明与锁定分离：本文件是唯一的依赖声明来源，`conda-lock lock` 据此生成
+# conda-lock.yml（精确版本，提交进仓库）。加了新依赖后重跑：
+#   conda run -n conda-lock conda-lock lock -f pyproject.toml
+# 安装（仓库根目录执行；默认含 dev、不含 sandbox，需要沙箱时追加 -E sandbox）：
+#   conda run -n conda-lock conda-lock install -n nightwatch_agents conda-lock.yml
+#   pip install -e . --no-deps        # 本地包单独装，不参与锁定
+#
+# 注：conda-lock 本身装在独立的 `conda-lock` 环境里——它依赖的 packaging /
+# requests / ruamel.yaml 版本与 conda 自身冲突，无法装进 base。
+[tool.conda-lock]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+default-non-conda-source = "pip"     # [project].dependencies 一律按 pip 依赖处理
+
+[tool.conda-lock.dependencies]       # 只有这里列出的走 conda
+python = "3.14"
+pip = "*"

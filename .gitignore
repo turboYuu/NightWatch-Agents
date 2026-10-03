@@ -217,3 +217,16 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- NightWatch 运行时产物 ---
+# 持久化检查点（LangGraph SqliteSaver），不应入库
+checkpoints.sqlite
+*.sqlite
+*.sqlite3
+
+# 目标仓库里按 repo 隔离的自动记忆（随被维护仓库走，不进本仓库）
+.deepagents/
+
+# 本地环境变量（含 GITHUB_TOKEN / 模型 API Key），绝不入库
+.env
+.env.*
