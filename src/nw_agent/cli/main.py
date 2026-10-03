@@ -9,7 +9,8 @@ P0 阶段只定义**参数契约**（与 doc/NightWatch产品说明.md 第 5 章
     --issue         GitHub Issue 编号（与 --task 二选一）
     --task          自然语言任务描述（与 --issue 二选一）
     --dry-run       只跑非沙箱流程：不建沙箱、不调远端
-    --review        人工审核策略：always / auto / never
+    --review        人工审核策略：always 强制人审（默认）/ auto 仅白名单任务免审
+                    / never 全免（仅本地调试）
     --trace         开启 tracing / 结构化日志
     --budget-tokens 单任务 token 预算上限（预算熔断用）
 """
@@ -67,7 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--review",
         choices=["always", "auto", "never"],
         default="always",
-        help="人工审核策略：always 强制人审（默认）/ auto 仅白名单任务免审 / never 全免（仅本地调试）",
+        help="人工审核策略：always 强制人审（默认）/ auto 白名单免审 / never 全免",
     )
     parser.add_argument("--trace", action="store_true", help="开启 tracing 或结构化 JSON 日志")
     parser.add_argument(
