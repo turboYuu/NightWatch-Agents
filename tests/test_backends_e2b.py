@@ -222,6 +222,24 @@ def test_attach_prepares_workspace(tmp_path: Path) -> None:
     assert any("git --version" in call for call in double.commands.calls)
 
 
+def test_attach_kills_sandbox_when_workspace_prepare_fails(tmp_path: Path) -> None:
+    """创建期准备失败时必须**主动销毁**已建好的沙箱，且原异常照常抛出。
+
+    否则这个沙箱再也没人引用得到（``create`` 抛错时句柄没返回给任何人），只能等
+    E2B 的 on_timeout 兜底回收——白占一个沙箱，最长 30 分钟。
+
+    制造失败：把 repo_path 指到一个「父级是文件」的路径上，``mkdir -p`` 必然失败。
+    """
+    blocked = tmp_path / "blocked"
+    blocked.write_text("occupied")
+    config = SandboxConfig(repo_path=str(blocked / "repo"))
+    double = SandboxDouble(tmp_path)
+
+    with pytest.raises(RuntimeError, match="沙箱环境准备失败"):
+        E2BSandboxBackend._attach(config, double)
+    assert double.kill_calls == 1
+
+
 # --------------------------------------------------------- git 基线与 diff
 @needs_git
 def test_upload_repo_builds_single_baseline_commit(tmp_path: Path) -> None:

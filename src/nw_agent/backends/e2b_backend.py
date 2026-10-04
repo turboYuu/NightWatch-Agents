@@ -132,7 +132,14 @@ class E2BSandboxBackend(SandboxBackend):
         替身（见 ``tests/e2b_double.py``）走通同一条「构造 → 环境准备」路径，不必联网。
         """
         backend = cls(config, sandbox=sandbox)
-        backend._prepare_workspace()
+        try:
+            backend._prepare_workspace()
+        except Exception:
+            # 环境准备失败时若直接抛出，这个已创建的远端沙箱就再也没人引用得到——
+            # 只能等 E2B 的 on_timeout 兜底回收，白白占着一个沙箱（默认最长 30 分钟）。
+            # 这里主动销毁，让「创建失败」不留残留物；kill 自身失败不影响原异常。
+            backend.kill()
+            raise
         return backend
 
     # ------------------------------------------------------------------ 状态
