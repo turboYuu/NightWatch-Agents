@@ -285,7 +285,7 @@ with backend:                       # 退出即 kill()，异常路径也兜得�
 
 **沙箱预热（P1 前必须验证的地基）**：E2B 是**远端容器**，代码与运行环境都需要“送进去”，这是全流程最大的隐形工作量，不能留到写业务时才碰。设计要点：
 
-- **基础镜像**：预构建带 `conda` 与常用工具链的模板镜像，用 `Sandbox.create(template=...)` 复用，避免每次冷装。**已落定**为 `nightwatch-base`——以 E2B 官方 `e2bdev/base` 为基底，叠加 `git`（基线提交与 diff 的前提）、Miniconda（`environment.yml` 类仓库要用）、`pytest`，由 `scripts/build_sandbox_template.py` 用 `e2b.Template` 声明并构建。**不用 Node 的 e2b CLI**：Python SDK 自带 `Template` / `TemplateBuilder`，少一个工具链依赖。上层通过 `SandboxConfig(template="nightwatch-base")` 引用。
+- **基础镜像**：预构建带 `conda` 与常用工具链的模板镜像，用 `Sandbox.create(template=...)` 复用，避免每次冷装。**已落定**为 `nightwatch-base`——以 E2B 官方 `e2bdev/base` 为基底，叠加 `git`（基线提交与 diff 的前提）、conda（`environment.yml` 类仓库要用，默认取 Miniforge 而非 Miniconda：走 conda-forge、无附加条款、安装包小约 37%）、`pytest`，由 `scripts/build_sandbox_template.py` 用 `e2b.Template` 声明并构建。**不用 Node 的 e2b CLI**：Python SDK 自带 `Template` / `TemplateBuilder`，少一个工具链依赖。上层通过 `SandboxConfig(template="nightwatch-base")` 引用。
 - **代码进入方式**：只**上传**仓库的必要文件子集（源码 + 元数据）到 `/workspace/`；E2B **无法挂载宿主机目录**，因此“挂载”一词不适用。
 - **环境准备**：依赖按镜像缓存，或按**目标仓库自己的依赖清单**增量安装（`pyproject.toml` / `requirements.txt` / `environment.yml` 皆可能，需探测而非假定）；对大仓库要评估上传耗时与超时。
 - **冷启动基准**：P0 必须实测“创建沙箱 → 能跑通 `pytest`”的耗时，作为后续所有时间预算的基线。方法、脚本与结果见 [沙箱基准.md](沙箱基准.md)。

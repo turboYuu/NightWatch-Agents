@@ -42,8 +42,14 @@ if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 import e2b  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
 
 from nw_agent.backends import E2BSandboxBackend, SandboxConfig  # noqa: E402
+
+# 与 build_sandbox_template.py 一致：允许把 E2B_API_KEY 放在仓库根的 .env 里
+# （该文件已被 .gitignore 覆盖）。必须在这里就加载——SDK 是在 create() 时才去读
+# os.environ 的，晚于本行就会拿不到。
+load_dotenv(override=True)
 
 # 上传到沙箱的合成 mini repo。conftest.py 把仓库根放进 sys.path，使
 # `from ok import add` 在 pytest 的任意 import 模式下都成立——比依赖 pytest

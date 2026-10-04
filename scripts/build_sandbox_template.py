@@ -3,7 +3,8 @@
 
 对应 doc/NightWatch产品说明.md 3.3「沙箱预热 · 基础镜像」：预构建一个带
 `git` + `conda` + `pytest` 的模板镜像，后续每次跑任务用
-`Sandbox.create(template=...)` 复用，避免每次冷装。
+`Sandbox.create(template=...)` 复用，避免每次冷装。conda 发行版默认取 Miniforge
+（理由见 `MINIFORGE_INSTALLER_URL` 上方注释），要 Miniconda 加 `--miniconda`。
 
 **为什么是脚本而不是包内模块**：`src/nw_agent/` 严格按产品说明第 2 章的六层划分
 （cli/graph/agents/tools/backends/memory），构建模板不属于其中任何一层；上层要用
@@ -27,7 +28,10 @@ from __future__ import annotations
 import argparse
 import sys
 
+from dotenv import load_dotenv
 from e2b import Template
+
+load_dotenv(override=True)
 
 # 构建出来的模板标识；也是 `SandboxConfig(template=...)` 里要写的值。
 DEFAULT_TEMPLATE_NAME = "nightwatch-base"
@@ -36,16 +40,31 @@ DEFAULT_TEMPLATE_NAME = "nightwatch-base"
 # （脚本不 import 包，故此处重复一次字面量，改一处要同步）。
 WORKDIR = "/workspace"
 
-# Miniconda 安装器。E2B 沙箱是 linux-64（x86_64），故取该架构的官方安装包。
-# 装它是因为产品说明 3.3「环境准备」要求按目标仓库自己的依赖清单增量安装，而
-# environment.yml 只能用 conda 装。
+# conda 发行版。E2B 沙箱是 linux-64（x86_64），故取该架构的安装包。
+# 装 conda 是因为产品说明 3.3「环境准备」要求按目标仓库自己的依赖清单增量安装，
+# 而 environment.yml 只能用 conda 装。
+#
+# **默认 Miniforge 而非 Miniconda**：
+#   1. 走 conda-forge，不含 Anaconda 商业频道，不必处理附加条款；
+#   2. 安装包小约 37%（124MB vs 198MB）——镜像大小正是本 spike 要评估的成本项；
+#   3. 自带 mamba，P1 按 environment.yml 建环境更快。
+# 两者都是 constructor 装出来的 conda，`-b -p` 用法完全一致，可随时用 --miniconda 换回。
+MINIFORGE_INSTALLER_URL = (
+    "https://github.com/conda-forge/miniforge/releases/latest/download/"
+    "Miniforge3-Linux-x86_64.sh"
+)
 MINICONDA_INSTALLER_URL = (
     "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
 )
-MINICONDA_PREFIX = "/opt/miniconda3"
+CONDA_PREFIX = "/opt/conda"
 
 
-def build_template(*, with_conda: bool = True, with_pytest: bool = True) -> Template:
+def build_template(
+    *,
+    with_conda: bool = True,
+    with_pytest: bool = True,
+    use_miniconda: bool = False,
+) -> Template:
     """返回（尚未构建的）`nightwatch-base` 模板定义。
 
     基底选 E2B 官方 `e2bdev/base` 而非裸 ubuntu：该镜像已带 envd 等运行时前提，
@@ -56,8 +75,9 @@ def build_template(*, with_conda: bool = True, with_pytest: bool = True) -> Temp
     模板来说没有需要自启动的服务，继承才是对的。
 
     Args:
-        with_conda: 是否预装 Miniconda。关掉可造「轻量变体」做对比实验。
+        with_conda: 是否预装 conda。关掉可造「轻量变体」做对比实验。
         with_pytest: 是否预装 pytest。关掉则回到「默认模板」的状态（需现装）。
+        use_miniconda: 用 Miniconda 而非默认的 Miniforge。
 
     Returns:
         `TemplateBuilder`/`TemplateFinal`，可直接交给 `Template.build` 或
@@ -65,24 +85,12 @@ def build_template(*, with_conda: bool = True, with_pytest: bool = True) -> Temp
     """
     template = Template().from_base_image()
 
-    # bzip2 不是可选项：Miniconda 安装器解包时依赖它，缺了会在安装中途失败。
+    # bzip2 不是可选项：conda 安装器解包时依赖它，缺了会在安装中途失败。
     template = template.apt_install(["git", "ca-certificates", "curl", "bzip2"])
 
     if with_conda:
-        # 传列表给 run_cmd，SDK 会用 `&&` 合成一条 RUN（不是各给一条 RUN）——任一步失败
-        # 整条失败，构建日志里看到的是一条命令。
-        template = template.run_cmd(
-            [
-                f"curl -fsSL {MINICONDA_INSTALLER_URL} -o /tmp/miniconda.sh",
-                # -b 静默批处理模式，无需交互同意许可。
-                f"bash /tmp/miniconda.sh -b -p {MINICONDA_PREFIX}",
-                "rm -f /tmp/miniconda.sh",
-                # 只把 conda 本体软链到 /usr/local/bin，**不**链 python/pip：
-                # 链了会把系统 python 顶掉，而 pytest 装在系统 python 上，两者混用
-                # 会让「到底哪个解释器在跑」变得不可预测。conda 留给 P1 建独立环境用。
-                f"ln -sf {MINICONDA_PREFIX}/bin/conda /usr/local/bin/conda",
-            ]
-        )
+        installer_url = MINICONDA_INSTALLER_URL if use_miniconda else MINIFORGE_INSTALLER_URL
+        template = _add_conda_steps(template, installer_url)
 
     if with_pytest:
         # 装在系统 python 上：e2b_backend 的 execute 默认 cwd 在仓库根，跑的就是
@@ -90,6 +98,45 @@ def build_template(*, with_conda: bool = True, with_pytest: bool = True) -> Temp
         template = template.pip_install("pytest")
 
     return template.set_workdir(WORKDIR)
+
+
+def _add_conda_steps(template: object, installer_url: str) -> object:
+    """把 conda 的安装拆成**独立 RUN**，便于失败时定位到具体一步。
+
+    早先把它们写成一条 ``&&`` 链，结果构建失败时只拿到一句「整条链 exit status 1」，
+    分不清是下载、解包还是建软链炸的。每一步单独成 RUN 后，E2B 的构建日志会指明
+    是哪一条命令失败。
+
+    Args:
+        template: 当前 `TemplateBuilder`。
+        installer_url: conda 发行版安装器地址。
+
+    Returns:
+        追加了各步骤的 `TemplateBuilder`。
+    """
+    # --retry：构建环境的网络偶发失败不该让整次构建白跑。
+    template = template.run_cmd(
+        f"curl -fsSL --retry 3 --retry-delay 2 {installer_url} -o /tmp/conda-installer.sh"
+    )
+    # 先确认下下来的真是一个 shell 脚本：错误页或被截断的响应同样是 HTTP 200，
+    # 直接丢给 bash 只会得到一句含糊的语法错误。
+    template = template.run_cmd(
+        "head -c 2 /tmp/conda-installer.sh | grep -q '#!' "
+        "|| { echo '安装器不是可执行脚本，下载可能被拦截或截断'; exit 1; }"
+    )
+    # -b 静默批处理模式，无需交互确认。
+    template = template.run_cmd(f"bash /tmp/conda-installer.sh -b -p {CONDA_PREFIX}")
+    # 装完立刻自证：这一步过了才说明 conda 真的可用，而不是「安装器返回 0 但没装上」。
+    template = template.run_cmd(f"{CONDA_PREFIX}/bin/conda --version")
+    # 只把 conda 本体软链到 /usr/local/bin，**不**链 python/pip：
+    # 链了会把系统 python 顶掉，而 pytest 装在系统 python 上，两者混用
+    # 会让「到底哪个解释器在跑」变得不可预测。conda 留给 P1 建独立环境用。
+    # mkdir -p 是保险：基底镜像不保证有 /usr/local/bin，缺了会让 ln 直接失败。
+    template = template.run_cmd(
+        f"mkdir -p /usr/local/bin && ln -sf {CONDA_PREFIX}/bin/conda /usr/local/bin/conda"
+    )
+    template = template.run_cmd("rm -f /tmp/conda-installer.sh")
+    return template
 
 
 def _print_build_log(entry: object) -> None:
@@ -100,14 +147,22 @@ def _print_build_log(entry: object) -> None:
 
 def _cmd_print_dockerfile(args: argparse.Namespace) -> int:
     """打印模板对应的 Dockerfile。不联网、不需要 API Key。"""
-    template = build_template(with_conda=not args.no_conda, with_pytest=not args.no_pytest)
+    template = build_template(
+        with_conda=not args.no_conda,
+        with_pytest=not args.no_pytest,
+        use_miniconda=args.miniconda,
+    )
     print(Template.to_dockerfile(template))
     return 0
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
     """在 E2B 服务端构建模板。需要 E2B_API_KEY，且会计费（构建时长）。"""
-    template = build_template(with_conda=not args.no_conda, with_pytest=not args.no_pytest)
+    template = build_template(
+        with_conda=not args.no_conda,
+        with_pytest=not args.no_pytest,
+        use_miniconda=args.miniconda,
+    )
     print(f"开始构建模板 {args.name!r}（服务端构建，约几分钟）……", flush=True)
     info = Template.build(
         template,
@@ -121,10 +176,19 @@ def _cmd_build(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """构造参数解析器。默认动作是构建；`--print-dockerfile` 切到离线模式。"""
+    """构造参数解析器。动作必须显式给出（`build` 或 `--print-dockerfile`）。"""
     parser = argparse.ArgumentParser(
         prog="build_sandbox_template.py",
         description="定义并构建 NightWatch 的 E2B 基础模板（nightwatch-base）。",
+    )
+    # 位置参数，且**故意不给默认值**：构建要花钱、要几分钟，不该因为「什么都没传」
+    # 就自动开建。什么都不给时打印帮助并以退出码 2 结束（见 main）。
+    parser.add_argument(
+        "action",
+        nargs="?",
+        choices=["build"],
+        default=None,
+        help="要执行的动作；当前只有 build（在服务端构建模板）",
     )
     parser.add_argument(
         "--print-dockerfile",
@@ -137,17 +201,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-cache", action="store_true", help="忽略构建缓存，全量重建（排查缓存问题时用）"
     )
     # 变体开关：用于 spike 隔离变量，回答「conda 增大镜像是否拖慢启动」。
-    parser.add_argument("--no-conda", action="store_true", help="不预装 Miniconda")
+    parser.add_argument("--no-conda", action="store_true", help="不预装 conda")
     parser.add_argument("--no-pytest", action="store_true", help="不预装 pytest")
+    parser.add_argument(
+        "--miniconda",
+        action="store_true",
+        help="用 Miniconda 而非默认的 Miniforge（装了 Anaconda 商业频道时用）",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    """入口。`--print-dockerfile` 走离线路径，否则构建。"""
-    args = build_parser().parse_args(argv)
+    """入口。
+
+    `--print-dockerfile` 走离线路径；`build` 走构建；两者都没给时打印帮助并以 2 退出
+    ——构建有成本，不设置「默认动作」这回事。
+    """
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if args.print_dockerfile:
         return _cmd_print_dockerfile(args)
-    return _cmd_build(args)
+    if args.action == "build":
+        return _cmd_build(args)
+    parser.print_help()
+    return 2
 
 
 if __name__ == "__main__":

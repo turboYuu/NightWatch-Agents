@@ -37,6 +37,8 @@ dependencies = [
     # 而它提供的价值（命令执行 + 文件读写）用裸 e2b SDK 直接写只有几十行，
     # 且 e2b 原生支持 cwd/envs，比它更没有表达力的 execute(command) 更合用。
     "e2b>=2.52,<3",
+
+    "python-dotenv==1.2.1",
 ]
 
 [project.optional-dependencies]

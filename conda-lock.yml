@@ -15,8 +15,8 @@
 version: 1
 metadata:
   content_hash:
-    osx-arm64: c84f8eab53ad175f42b482bf06316283b690238624f712b353030aef132a7e75
-    linux-64: cf9e23525fca115d763390b5e0f9e6555eaf0e8c000865b78ed68f8bf7e8728a
+    osx-arm64: 561847770d238ac32b32fb8005adf90dd5d58c1c26be4d3feeeea23c5017c721
+    linux-64: 8234a45804b0bb42649a431044c4caed3c0a6aa7dc68e9a969d999400f6f63a4
   channels:
   - url: conda-forge
     used_env_vars: []
@@ -2122,6 +2122,26 @@ package:
   url: https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl
   hash:
     sha256: a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427
+  category: main
+  optional: false
+- name: python-dotenv
+  version: 1.2.1
+  manager: pip
+  platform: linux-64
+  dependencies: {}
+  url: https://files.pythonhosted.org/packages/14/1b/a298b06749107c305e1fe0f814c6c74aea7b2f1e10989cb30f544a1b3253/python_dotenv-1.2.1-py3-none-any.whl
+  hash:
+    sha256: b81ee9561e9ca4004139c6cbba3a238c32b03e4894671e181b671e8cb8425d61
+  category: main
+  optional: false
+- name: python-dotenv
+  version: 1.2.1
+  manager: pip
+  platform: osx-arm64
+  dependencies: {}
+  url: https://files.pythonhosted.org/packages/14/1b/a298b06749107c305e1fe0f814c6c74aea7b2f1e10989cb30f544a1b3253/python_dotenv-1.2.1-py3-none-any.whl
+  hash:
+    sha256: b81ee9561e9ca4004139c6cbba3a238c32b03e4894671e181b671e8cb8425d61
   category: main
   optional: false
 - name: pyyaml
