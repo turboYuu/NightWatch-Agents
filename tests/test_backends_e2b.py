@@ -222,6 +222,21 @@ def test_attach_prepares_workspace(tmp_path: Path) -> None:
     assert any("git --version" in call for call in double.commands.calls)
 
 
+def test_prepare_workspace_escalates_when_dir_not_writable(tmp_path: Path) -> None:
+    """建目录必须带「不可写就提权」的兜底。
+
+    E2B 模板默认以非 root 用户跑，官方 ``e2bdev/base`` 里 ``/workspace`` 不存在且
+    根目录不可写，裸 ``mkdir -p`` 必然失败——这与模板有没有 git 无关。离线替身在
+    可写的临时目录里跑，永远走不到提权分支，所以要**断言命令串**把它钉住，
+    免得日后被当作冗余删掉。
+    """
+    _, double = make_backend(tmp_path)
+    setup = double.commands.calls[0]
+    assert "[ -w" in setup, "应先用 [ -w ] 探测目录可写性"
+    assert "sudo -n install -d" in setup, "不可写时应提权建目录并设属主"
+    assert "git --version" in setup, "git 探测不能丢"
+
+
 def test_attach_kills_sandbox_when_workspace_prepare_fails(tmp_path: Path) -> None:
     """创建期准备失败时必须**主动销毁**已建好的沙箱，且原异常照常抛出。
 

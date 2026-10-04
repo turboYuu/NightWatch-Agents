@@ -261,12 +261,16 @@ def main(argv: list[str] | None = None) -> int:
                 command_timeout=args.command_timeout,
             )
         except (RuntimeError, e2b.SandboxException) as exc:
-            # 最常见的两种原因都给一句可直接照做的结论，而不是甩堆栈。
+            # 最常见的两类原因都给一句可直接照做的结论，而不是甩堆栈。
+            # 注意**不要**把「沙箱环境准备失败」一口咬定成缺 git：默认模板实测自带
+            # git 2.39.5，早期真正卡住的是非 root 用户建不出 /workspace（已由后端的
+            # `sudo -n install -d` 兜底覆盖）。把两种成因都列出来才不至于误导。
             print(f"\n❌ 第 {index} 次运行失败：{exc}", file=sys.stderr)
             print(
-                "   若是「沙箱环境准备失败」，说明该模板未预装 git——"
-                "用 scripts/build_sandbox_template.py build 建 nightwatch-base 后改用 "
-                "--template nightwatch-base。",
+                "   若是「沙箱环境准备失败」，先看报错原文：缺 git 就用 "
+                "scripts/build_sandbox_template.py build 建 nightwatch-base 后改用 "
+                "--template nightwatch-base；若报的是 Permission denied，"
+                "则是该模板的沙箱用户无权建目录且没有免密 sudo。",
                 file=sys.stderr,
             )
             report["error"] = str(exc)
