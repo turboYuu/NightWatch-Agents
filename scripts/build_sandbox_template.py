@@ -58,6 +58,14 @@ MINICONDA_INSTALLER_URL = (
 )
 CONDA_PREFIX = "/opt/conda"
 
+# conda 安装目录里**沙箱用户需要写**的子目录（见 `_add_conda_steps` 末段的理由）。
+CONDA_USER_WRITABLE_SUBDIRS = ("envs", "pkgs")
+
+# 沙箱里的默认用户。`e2bdev/base` 声明了 `DEFAULT USER user`(uid 1000)，构建期
+# 的 run_cmd 也以它执行——这既是不加 `user="root"` 就会 Permission denied 的原因，
+# 也是下面要把 conda 的可写子目录与 WORKDIR 交给它的原因。
+SANDBOX_USER = "user"
+
 
 def build_template(
     *,
@@ -94,18 +102,35 @@ def build_template(
 
     if with_pytest:
         # 装在系统 python 上：e2b_backend 的 execute 默认 cwd 在仓库根，跑的就是
-        # PATH 上的 python/pytest，与这里一致。
+        # PATH 上的 python/pytest，与这里一致。`pip_install` 默认 `g=True`，
+        # 内部即以 `user="root"` 执行——非 root 写不进系统 site-packages。
         template = template.pip_install("pytest")
+
+    # 建 WORKDIR 并交给沙箱用户。Docker 的 WORKDIR 会以 root 建出目录，那样
+    # 沙箱用户往里写不了——上游后端因此得靠 `sudo -n install -d` 兜底。模板是
+    # 「预热」的，这步就该在这里做掉，让热路径不必提权。
+    template = template.run_cmd(
+        f"mkdir -p {WORKDIR} && chown {SANDBOX_USER}:{SANDBOX_USER} {WORKDIR}",
+        user="root",
+    )
 
     return template.set_workdir(WORKDIR)
 
 
 def _add_conda_steps(template: object, installer_url: str) -> object:
-    """把 conda 的安装拆成**独立 RUN**，便于失败时定位到具体一步。
+    """装上 conda：下载 → 校验 → 安装 → 自证，外加软链与可写目录。
 
-    早先把它们写成一条 ``&&`` 链，结果构建失败时只拿到一句「整条链 exit status 1」，
-    分不清是下载、解包还是建软链炸的。每一步单独成 RUN 后，E2B 的构建日志会指明
-    是哪一条命令失败。
+    **为什么下载与安装必须在同一条 RUN 里**：E2B 的构建层缓存不保留 ``/tmp``。
+    拆成多条 RUN 时，一旦下载那步命中缓存（内容不进快照），后面那条 RUN 就会
+    ``bash: /tmp/conda-installer.sh: No such file or directory``（exit 127）——
+    实测踩过。放进同一条 RUN 后安装器不跨步骤，缓存命中与否都成立。
+
+    代价是「哪一步炸了」不再由 RUN 边界体现，故用 ``echo`` 打编号标记补回来：
+    RUN 的 stdout 会进构建日志，失败时看最后一条标记就知道断在哪。
+
+    以 ``user="root"`` 执行：基底的 ``DEFAULT USER`` 是 ``user``(uid 1000)，
+    而 ``/opt`` 与 ``/`` 对非 root 不可写——安装到 ``/opt/conda``、写 ``/usr/local/bin``
+    都只有 root 做得到。E2B 自己的 ``apt_install`` / ``pip_install(g=True)`` 同此约定。
 
     Args:
         template: 当前 `TemplateBuilder`。
@@ -114,28 +139,43 @@ def _add_conda_steps(template: object, installer_url: str) -> object:
     Returns:
         追加了各步骤的 `TemplateBuilder`。
     """
-    # --retry：构建环境的网络偶发失败不该让整次构建白跑。
     template = template.run_cmd(
-        f"curl -fsSL --retry 3 --retry-delay 2 {installer_url} -o /tmp/conda-installer.sh"
+        [
+            "echo '[1/4] 下载安装器'",
+            # --retry：构建环境的网络偶发失败不该让整次构建白跑。
+            f"curl -fsSL --retry 3 --retry-delay 2 {installer_url} -o /tmp/conda-installer.sh",
+            "echo '[2/4] 校验下载物是脚本'",
+            # 错误页或被截断的响应同样是 HTTP 200，直接丢给 bash 只会得到一句含糊的
+            # 语法错误；先确认开头是 shebang。
+            "head -c 2 /tmp/conda-installer.sh | grep -q '#!' "
+            "|| { echo '安装器不是可执行脚本，下载可能被拦截或截断'; exit 1; }",
+            f"echo '[3/4] 安装到 {CONDA_PREFIX}'",
+            # -b 静默批处理模式，无需交互确认。
+            f"bash /tmp/conda-installer.sh -b -p {CONDA_PREFIX}",
+            "rm -f /tmp/conda-installer.sh",
+            "echo '[4/4] 自证 conda 可用'",
+            # 装完立刻自证：这一步过了才说明 conda 真的可用，而不是「安装器返回 0 但没装上」。
+            f"{CONDA_PREFIX}/bin/conda --version",
+        ],
+        user="root",
     )
-    # 先确认下下来的真是一个 shell 脚本：错误页或被截断的响应同样是 HTTP 200，
-    # 直接丢给 bash 只会得到一句含糊的语法错误。
-    template = template.run_cmd(
-        "head -c 2 /tmp/conda-installer.sh | grep -q '#!' "
-        "|| { echo '安装器不是可执行脚本，下载可能被拦截或截断'; exit 1; }"
-    )
-    # -b 静默批处理模式，无需交互确认。
-    template = template.run_cmd(f"bash /tmp/conda-installer.sh -b -p {CONDA_PREFIX}")
-    # 装完立刻自证：这一步过了才说明 conda 真的可用，而不是「安装器返回 0 但没装上」。
-    template = template.run_cmd(f"{CONDA_PREFIX}/bin/conda --version")
     # 只把 conda 本体软链到 /usr/local/bin，**不**链 python/pip：
     # 链了会把系统 python 顶掉，而 pytest 装在系统 python 上，两者混用
     # 会让「到底哪个解释器在跑」变得不可预测。conda 留给 P1 建独立环境用。
     # mkdir -p 是保险：基底镜像不保证有 /usr/local/bin，缺了会让 ln 直接失败。
     template = template.run_cmd(
-        f"mkdir -p /usr/local/bin && ln -sf {CONDA_PREFIX}/bin/conda /usr/local/bin/conda"
+        f"mkdir -p /usr/local/bin && ln -sf {CONDA_PREFIX}/bin/conda /usr/local/bin/conda",
+        user="root",
     )
-    template = template.run_cmd("rm -f /tmp/conda-installer.sh")
+    # conda 装成 root 所有，只把**它需要写的两个空目录**交给沙箱用户：
+    # P1 的 `conda create -n xxx` 落 envs、包缓存落 pkgs，两者不可写的话
+    # conda 装了等于没装。刻意不 `chown -R /opt/conda`——那会让整个 conda 安装
+    # （百余 MB）在新层里复制一份，正好抵消掉换 Miniforge 省下的镜像体积。
+    writable = " ".join(f"{CONDA_PREFIX}/{sub}" for sub in CONDA_USER_WRITABLE_SUBDIRS)
+    template = template.run_cmd(
+        f"mkdir -p {writable} && chown -R {SANDBOX_USER}:{SANDBOX_USER} {writable}",
+        user="root",
+    )
     return template
 
 

@@ -21,6 +21,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 import build_sandbox_template  # noqa: E402
 from e2b import Template  # noqa: E402
+from e2b.template.types import InstructionType  # noqa: E402
 
 from nw_agent.backends import WORKDIR  # noqa: E402
 
@@ -28,6 +29,24 @@ from nw_agent.backends import WORKDIR  # noqa: E402
 def dockerfile(**overrides: object) -> str:
     """把模板定义渲染成 Dockerfile 文本。"""
     return Template.to_dockerfile(build_sandbox_template.build_template(**overrides))
+
+
+def run_instructions(**overrides: object) -> list[tuple[str, str | None]]:
+    """返回 ``(命令, 执行用户)`` 列表。
+
+    有些断言在 ``to_dockerfile()`` 的输出上做不到——它**会丢掉 RUN 的执行用户**，
+    而「这一步必须以 root 跑」恰是踩过坑的地方（基底 ``DEFAULT USER user``，
+    非 root 写不进 ``/opt`` 与 ``/usr/local/bin``）。故这里改读构建器的指令对象。
+    """
+    template = build_sandbox_template.build_template(**overrides)
+    return [
+        (instruction["args"][0], instruction["args"][1])
+        if len(instruction["args"]) > 1
+        else (instruction["args"][0], None)
+        # 下划线属性：SDK 没有公开的等价物，而执行用户只在这一层拿得到。
+        for instruction in template._template._instructions
+        if instruction["type"] == InstructionType.RUN
+    ]
 
 
 def test_default_template_installs_git_conda_and_pytest() -> None:
@@ -51,17 +70,38 @@ def test_miniconda_flag_switches_distribution() -> None:
     assert "Miniforge3" not in rendered
 
 
-def test_conda_steps_are_separate_runs() -> None:
-    """conda 安装必须拆成多条 RUN。
+def test_conda_download_and_install_share_one_run() -> None:
+    """下载与安装必须在**同一条 RUN**里，不能拆开。
 
-    曾经把它们写成一条 `&&` 链，构建失败时只拿到一句「整条链 exit status 1」，
-    定位不到具体哪一步。这条断言把「可定位」钉住：至少要有独立的下载、安装、
-    自证（conda --version）三条 RUN。
+    E2B 的构建层缓存不保留 `/tmp`：拆开时若下载那步命中缓存（内容不进快照），
+    紧随其后的安装步骤就会 `bash: /tmp/conda-installer.sh: No such file or
+    directory`（exit 127）。实测踩过这个坑——曾按「多条 RUN 便于定位失败」
+    的理由拆开，结果模板根本建不出来。
+
+    代价是 RUN 边界不再标示断点，改用 `echo '[n/4] ...'` 编号标记补回来，
+    故一并断言标记存在。
     """
     rendered = dockerfile()
     runs = [line for line in rendered.splitlines() if line.startswith("RUN ")]
-    assert any("curl" in run for run in runs), "下载应为独立 RUN"
-    assert any("conda --version" in run for run in runs), "安装后自证应为独立 RUN"
+    install_runs = [run for run in runs if "conda-installer.sh" in run]
+    assert len(install_runs) == 1, "下载与安装必须同处一条 RUN"
+    assert "curl" in install_runs[0] and "--version" in install_runs[0]
+    assert "[4/4]" in install_runs[0], "缺少编号标记，失败时定位不到断点"
+
+
+def test_root_only_steps_run_as_root() -> None:
+    """写系统路径的步骤必须以 root 执行。
+
+    基底 `e2bdev/base` 声明了 `DEFAULT USER user`(uid 1000)，而 `/opt`、`/` 与
+    `/usr/local/bin` 对非 root 不可写。裸 `run_cmd` 会以 `user` 身份跑，实测
+    在 `bash installer -p /opt/conda` 上 Permission denied。
+    """
+    instructions = run_instructions()
+    needles = (build_sandbox_template.CONDA_PREFIX, "/usr/local/bin/conda", "pip install pytest")
+    for needle in needles:
+        matching = [(cmd, user) for cmd, user in instructions if needle in cmd]
+        assert matching, f"未找到含 {needle!r} 的 RUN"
+        assert all(user == "root" for _, user in matching), f"{needle!r} 所在的 RUN 未以 root 执行"
 
 
 def test_template_workdir_matches_backend_workdir() -> None:
