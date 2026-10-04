@@ -21,13 +21,25 @@ requires-python = ">=3.11"
 license = { file = "LICENSE" }   # 待正式打包发布时改用 PEP 639 的 SPDX 字符串写法
 dependencies = [
     # 运行时依赖在 P0 逐步补齐；先放已确认存在的核心包。
-    # 沙箱后端相关依赖在下面的 sandbox 组；增删依赖的完整流程见 doc/依赖管理.md。
+    # 增删依赖的完整流程见 doc/依赖管理.md。
     "langgraph>=0.2",
     "langchain-core>=0.3",
+    # deepagents 是**运行时**依赖而非可选：nw_agent.backends 的 SandboxBackend 必须继承
+    # 它的 BaseSandbox——deepagents 的能力探测用 `type(self).ls_info is not
+    # BackendProtocol.ls_info` 这类**类属性身份比对**，鸭子类型无法通过。
+    # 代价：它会连带引入完整 langchain 及 langchain-anthropic / langchain-google-genai。
+    "deepagents>=0.6,<0.7",
+    # E2B 是 SandboxBackend 的唯一实现，故为必需依赖（不是可选组）。
+    # 下界 >=2.52 是从 ">=1.0" 收紧来的：>=1.0 只是「装得上」，而 SandboxBackend
+    # 用到的是 2.x 的 commands.run(cwd=/envs=) 与 files.write_files 的实测行为。
+    #
+    # 刻意**不**依赖 langchain-e2b：它是 0.0.x、不带 py.typed（mypy strict 下不可用），
+    # 而它提供的价值（命令执行 + 文件读写）用裸 e2b SDK 直接写只有几十行，
+    # 且 e2b 原生支持 cwd/envs，比它更没有表达力的 execute(command) 更合用。
+    "e2b>=2.52,<3",
 ]
 
 [project.optional-dependencies]
-sandbox = ["e2b>=1.0"]                                   # 云端沙箱后端（可选）
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]           # 开发工具
 
 [project.scripts]
@@ -79,7 +91,7 @@ addopts = "-q"
 # 声明与锁定分离：本文件是唯一的依赖声明来源，`conda-lock lock` 据此生成
 # conda-lock.yml（精确版本，提交进仓库）。加了新依赖后重跑：
 #   conda run -n conda-lock conda-lock lock -f pyproject.toml
-# 安装（仓库根目录执行；默认含 dev、不含 sandbox，需要沙箱时追加 -E sandbox）：
+# 安装（仓库根目录执行）：
 #   conda run -n conda-lock conda-lock install -n nightwatch_agents conda-lock.yml
 #   pip install -e . --no-deps        # 本地包单独装，不参与锁定
 #

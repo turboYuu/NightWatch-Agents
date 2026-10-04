@@ -248,45 +248,39 @@ main_agent = create_deep_agent(
 E2BSandboxBackend 配置（换后端只需替换 `backend=` 传参）：
 
 ```python
-from e2b import Sandbox
 from deepagents import create_deep_agent
-from langchain_e2b import E2BSandbox
+from nw_agent.backends import create_backend
 
-e2b_sandbox = Sandbox.create()
-backend = E2BSandbox(sandbox=e2b_sandbox)
+# 当前唯一后端：云端 E2B（需 E2B_API_KEY）
+backend = create_backend("e2b")
 
-agent = create_deep_agent(
-    model=MAIN_MODEL,
-    system_prompt="You are a Python coding assistant with sandbox access.",
-    backend=backend,
-)
-
-try:
-    result = agent.invoke(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "Create a small Python package and run pytest",
-                }
-            ]
-        }
+with backend:                       # 退出即 kill()，异常路径也兜得住
+    agent = create_deep_agent(
+        model=MAIN_MODEL,
+        system_prompt="You are a Python coding assistant with sandbox access.",
+        backend=backend,            # 换隔离方案只需换这一处的实现类
     )
-    for msg in result["messages"]:
-        msg.pretty_print()
-
-finally:
-    e2b_sandbox.kill()  # 销毁沙箱
+    result = agent.invoke({...})
 ```
 
-> **包名已核实**：`langchain-e2b` 在 PyPI 上存在（官方维护，`requires_python >=3.11,<4.0`），其依赖为 `e2b>=2.32,<3` 与 `deepagents>=0.6,<0.7`。当前 `pyproject.toml` 的 `sandbox` 可选组只声明了 `e2b`，`langchain-e2b` 的接入步骤见 [依赖管理.md](依赖管理.md)。
+> **接口落地的三个取舍**（实现见 `src/nw_agent/backends/`）：
+>
+> 1. `SandboxBackend` **继承** deepagents 的 `BaseSandbox`，而非自带 `typing.Protocol`——
+>    deepagents 判定后端能力用的是**类属性身份比对**（`type(self).ls_info is not
+>    BackendProtocol.ls_info`），鸭子类型通不过。代价是 `deepagents` 必须进运行时依赖。
+> 2. 「五动作」中的**执行命令**直接采用 deepagents 的 `execute(command, *, timeout)`
+>    签名，不另立一套；**创建**做成模块级工厂 `create_backend(kind, config)` 而不是
+>    实例方法——未创建完的实例根本无法构造。
+> 3. E2B 实现**不用** `langchain-e2b`：它不带 `py.typed`、是 `0.0.x`，而裸 `e2b` 的
+>    `commands.run` 原生支持 `cwd`/`envs`。理由详见 [依赖管理.md](依赖管理.md)。
 
-**`FakeSandboxBackend`（仅开发/测试）**：P0 随接口一起提供，用本地 subprocess / 内存模拟沙箱，让无 E2B Key 的贡献者与 CI 也能跑通全流程、写单测。**它不提供隔离，绝不能用于真实修复**（会污染宿主），生产默认禁用。
+**唯一后端 = E2B。** 早期曾随接口提供一个本地 subprocess 的「假沙箱」以支持无 Key 开发，现已移除：它不是沙箱，一条 `rm -rf ~` 就能毁掉开发机，长期存在误用风险。无 E2B Key 时的离线回归改由**注入式 SDK 测试替身**承担——测试向 `E2BSandboxBackend` 注入一个伪造的 `e2b.Sandbox`（只存在于 `tests/`，不是后端实现，生产代码无法引用），从而不联网覆盖上传 / 执行 / 导出 diff / 销毁的全部逻辑。
 
 **⚠️ 代码外发风险（必须正视）**：默认后端 E2B 是**云端**沙箱，意味着目标仓库的代码会被上传到第三方服务执行。这是企业采用的**第一道否决线**，必须显式声明：
 
 - README 与文档中**明确写出**“代码将离开本地、在第三方云沙箱运行”。
-- 提供两条规避路径：`--dry-run`（不建沙箱、不调用远端），以及**可插拔的本地后端**（替换 `SandboxBackend` 实现即可，接口不变）。
+- 提供规避路径：`--dry-run` 只跑非沙箱流程（生成方案、展示 diff 预览），不建沙箱、不调用远端。
+- 接口保持可插拔：将来若要换成自建/本地隔离方案，替换 `SandboxBackend` 的实现类即可，上层编排与工具代码零改动。
 - 私有仓库、含密钥的仓库**默认不建议**使用云端后端。
 
 **沙箱预热（P1 前必须验证的地基）**：E2B 是**远端容器**，代码与运行环境都需要“送进去”，这是全流程最大的隐形工作量，不能留到写业务时才碰。设计要点：

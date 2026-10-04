@@ -9,7 +9,7 @@
     graph/    LangGraph 外层状态机（阶段 / 检查点 / HITL / 重试 / 预算熔断）
     agents/   DeepAgent 内层运行时（主代理 + analyze/search/fix 子代理）
     tools/    交给 Agent 的沙箱工具（read_file / write_file / execute_shell ...）
-    backends/ SandboxBackend 抽象与实现（E2B 默认 / Fake 仅测试）
+    backends/ SandboxBackend 抽象与 E2B 实现
     memory/   项目级记忆（AGENTS.md）与按 repo 隔离的自动记忆积累
 
 关键边界（勿越界）：
