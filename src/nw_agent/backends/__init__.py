@@ -36,7 +36,11 @@ from nw_agent.backends.interface import (
 )
 from nw_agent.backends.upload import (
     DEFAULT_DENY_PATTERNS,
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_FILES,
+    LocalRepoFiles,
     is_denied,
+    read_local_repo,
     select_upload_files,
 )
 
@@ -45,6 +49,8 @@ BackendKind = Literal["e2b"]
 
 __all__ = [
     "DEFAULT_DENY_PATTERNS",
+    "DEFAULT_MAX_BYTES",
+    "DEFAULT_MAX_FILES",
     "ERR_FILE_NOT_FOUND",
     "ERR_INVALID_PATH",
     "ERR_IS_DIRECTORY",
@@ -54,11 +60,13 @@ __all__ = [
     "WORKDIR",
     "BackendKind",
     "E2BSandboxBackend",
+    "LocalRepoFiles",
     "SandboxBackend",
     "SandboxClosedError",
     "SandboxConfig",
     "create_backend",
     "is_denied",
+    "read_local_repo",
     "select_upload_files",
 ]
 

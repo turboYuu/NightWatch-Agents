@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import fnmatch
 from collections.abc import Sequence
-from pathlib import PurePosixPath
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 
 # 凭据类文件的默认黑名单。语义是「文件名或相对路径命中任一模式即拒绝」，
 # 匹配大小写不敏感（macOS/Windows 上 `.ENV` 与 `.env` 是同一类东西，不该只在
@@ -97,3 +98,115 @@ def select_upload_files(
         else:
             allowed.append((path, content))
     return allowed, rejected
+
+
+# ---------------------------------------------------------------------------
+# 本地仓库 → 上传子集
+# ---------------------------------------------------------------------------
+# 上传要跳过的目录名。判断依据是「与任务无关且体积大」：版本库基线由沙箱侧重建、
+# 依赖与缓存目录动辄上万文件（上传耗时是整条链路的主要成本项）、IDE 配置与代码理解无关。
+SKIP_DIR_NAMES = frozenset(
+    {
+        ".git",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "node_modules",
+        ".idea",
+        ".vscode",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".ipynb_checkpoints",
+    }
+)
+
+# 默认上限。**必须有上限**：一个失控的大仓库会让上传卡到超时，而失败现象是
+# 「任务超时」而不是「文件太多」，不设限就查不出原因。
+DEFAULT_MAX_FILES = 2000
+DEFAULT_MAX_BYTES = 32 * 1024 * 1024  # 32 MiB
+
+
+@dataclass(frozen=True)
+class LocalRepoFiles:
+    """本地仓库的读取结果。"""
+
+    files: list[tuple[str, bytes]]
+    """已过滤、可直接喂给 ``upload_repo`` 的 ``(仓库内相对路径, 内容)``。"""
+
+    rejected: list[str]
+    """命中凭据黑名单、**刻意不上传**的路径。"""
+
+    skipped: list[str]
+    """因超出文件数/字节上限而被丢弃的路径。**必须报出来**——静默截断会让人以为
+    上传是完整的，任务失败时又会怀疑是模型改错而不是「文件压根没送进去」。"""
+
+    truncated: bool
+    """是否发生了截断（等价于 ``bool(skipped)``，单列是为了让调用点读起来更直白）。"""
+
+    def summary(self) -> str:
+        """一行摘要，供 CLI 打印。"""
+        total_bytes = sum(len(content) for _, content in self.files)
+        text = f"将上传 {len(self.files)} 个文件（{total_bytes / 1024:.0f} KiB）"
+        if self.rejected:
+            text += f"，滤掉 {len(self.rejected)} 个凭据类文件"
+        if self.skipped:
+            text += f"，⚠️ 因超上限丢弃 {len(self.skipped)} 个文件"
+        return text
+
+
+def read_local_repo(
+    path: Path,
+    *,
+    deny_patterns: Sequence[str] = DEFAULT_DENY_PATTERNS,
+    max_files: int = DEFAULT_MAX_FILES,
+    max_bytes: int = DEFAULT_MAX_BYTES,
+) -> LocalRepoFiles:
+    """把本地仓库读成「可上传的文件子集」。
+
+    顺序：先按目录黑名单与凭据黑名单过滤，再按**累计字节数**与文件数截断。截断发生在
+    排序之后，因此结果对同一仓库是确定的（可重复），不会这次漏这几个、下次漏那几个。
+
+    Args:
+        path: 本地仓库根目录。
+        deny_patterns: 凭据黑名单，见 :data:`DEFAULT_DENY_PATTERNS`。
+        max_files: 文件数上限。
+        max_bytes: 总字节上限（按**压缩前**的原始大小算）。
+
+    Returns:
+        :class:`LocalRepoFiles`。
+
+    Raises:
+        NotADirectoryError: ``path`` 不是目录。
+    """
+    if not path.is_dir():
+        raise NotADirectoryError(f"不是目录：{path}")
+
+    kept: list[tuple[str, bytes]] = []
+    rejected: list[str] = []
+    skipped: list[str] = []
+    total_bytes = 0
+
+    for file_path in sorted(path.rglob("*")):
+        if not file_path.is_file():
+            continue
+        relative = file_path.relative_to(path)
+        if SKIP_DIR_NAMES & set(relative.parts):
+            continue
+        posix = relative.as_posix()
+        if is_denied(posix, deny_patterns):
+            rejected.append(posix)
+            continue
+        content = file_path.read_bytes()
+        if len(kept) >= max_files or total_bytes + len(content) > max_bytes:
+            skipped.append(posix)
+            continue
+        kept.append((posix, content))
+        total_bytes += len(content)
+
+    return LocalRepoFiles(
+        files=kept,
+        rejected=rejected,
+        skipped=skipped,
+        truncated=bool(skipped),
+    )

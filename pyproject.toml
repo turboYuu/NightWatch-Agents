@@ -38,6 +38,12 @@ dependencies = [
     # 且 e2b 原生支持 cwd/envs，比它更没有表达力的 execute(command) 更合用。
     "e2b>=2.52,<3",
 
+    # 模型 provider 包：`NW_MODEL_MAIN` / `NW_MODEL_FIX` 用的是 `provider:model` 串，
+    # `init_chat_model` 按 provider 前缀去注册表里找对应的包。deepagents 只在传递依赖里
+    # 带了 anthropic / google-genai，用其它 provider 必须显式声明，否则运行期才报
+    # 「provider 不认识」——那是要等建完沙箱、花了钱才发现的错误。
+    "langchain-deepseek>=1.1,<2",
+
     "python-dotenv==1.2.1",
 ]
 
