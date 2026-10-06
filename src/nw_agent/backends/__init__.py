@@ -28,20 +28,28 @@ from nw_agent.backends.errors import (
     SandboxClosedError,
 )
 from nw_agent.backends.interface import (
+    ACCEPTANCE_PATH,
     REPO_PATH,
     WORKDIR,
     SandboxBackend,
     SandboxConfig,
+)
+from nw_agent.backends.upload import (
+    DEFAULT_DENY_PATTERNS,
+    is_denied,
+    select_upload_files,
 )
 
 # 后端种类。加新后端时这里与 create_backend 一并扩展。
 BackendKind = Literal["e2b"]
 
 __all__ = [
+    "DEFAULT_DENY_PATTERNS",
     "ERR_FILE_NOT_FOUND",
     "ERR_INVALID_PATH",
     "ERR_IS_DIRECTORY",
     "ERR_PERMISSION_DENIED",
+    "ACCEPTANCE_PATH",
     "REPO_PATH",
     "WORKDIR",
     "BackendKind",
@@ -50,6 +58,8 @@ __all__ = [
     "SandboxClosedError",
     "SandboxConfig",
     "create_backend",
+    "is_denied",
+    "select_upload_files",
 ]
 
 

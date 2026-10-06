@@ -1,0 +1,10 @@
+diff --git a/calc.py b/calc.py
+index d415d4f..b8c9a0e 100644
+--- a/calc.py
++++ b/calc.py
+@@ -6,4 +6,5 @@
+ 
+ 
+ def mul(a: int, b: int) -> int:
++    """返回 a 与 b 的乘积。"""
+     return a * b

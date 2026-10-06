@@ -1,0 +1,13 @@
+{
+  "id": "docstring-add",
+  "title": "给 add() 补 docstring",
+  "task_type": "docstring",
+  "issue_text": "calc.py 里的 add() 没有任何 docstring，请给它补一个说明参数与返回值的中文 docstring。只改 add()，不要动 calc.py 里的其他函数。",
+  "target_files": ["calc.py"],
+  "forbidden_paths": [],
+  "verify": {
+    "command": "python3 -m pytest -q -p no:cacheprovider tests ../acceptance",
+    "evidence_level": "L2"
+  },
+  "notes": "对应 doc/开发路线图.md 5.8 的 docstring 类任务（L2 + L3）。验收测试刻意放在仓库之外：它的第一条断言在初始快照下必然失败（add 还没有 docstring），这是「改前必红」的判据来源。"
+}

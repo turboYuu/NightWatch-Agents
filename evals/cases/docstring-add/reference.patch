@@ -1,0 +1,12 @@
+diff --git a/calc.py b/calc.py
+index f010bc2..f6bd98e 100644
+--- a/calc.py
++++ b/calc.py
+@@ -6,6 +6,7 @@
+ 
+ 
+ def add(a: int, b: int) -> int:
++    """返回 a 与 b 的和。"""
+     return a + b
+ 
+ 

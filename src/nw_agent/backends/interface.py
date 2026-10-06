@@ -27,7 +27,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
-from deepagents.backends.protocol import FileUploadResponse
+from deepagents.backends.protocol import ExecuteResponse, FileUploadResponse
 from deepagents.backends.sandbox import BaseSandbox
 
 from nw_agent.backends.errors import SandboxClosedError
@@ -41,6 +41,13 @@ logger = logging.getLogger(__name__)
 # 白名单校验时直接复用这两个常量，不另立一套口径。
 WORKDIR = "/workspace"
 REPO_PATH = f"{WORKDIR}/repo"
+
+# 评测用例的隐藏验收测试落在**仓库之外**，刻意与 REPO_PATH 同级而非其子目录。
+# 原因是 export_diff() 会先 `git add -N .`：任何落进 repo 工作树的新文件都会被
+# `git diff HEAD` 捕获，从而混进「Agent 改了什么」的补丁里。放到仓库外，补丁内容
+# 与「什么时候上传验收测试」**结构性解耦**，不靠调用顺序维持。
+# （见 doc/开发路线图.md 第 0 阶段的 seed 评测集、5.7 的 L3 护栏）
+ACCEPTANCE_PATH = f"{WORKDIR}/acceptance"
 
 # git 基线提交所用的身份。沙箱镜像里通常没有全局 git 配置，不显式给会让
 # commit 以「Please tell me who you are」失败（退出码 128）。
@@ -125,6 +132,15 @@ class SandboxConfig:
     而本项目的所有动作都发生在仓库内。需要跑在别处时在命令里显式 ``cd``。
     """
 
+    acceptance_path: str = ACCEPTANCE_PATH
+    """隐藏验收文件（含 ``reference.patch``）的落脚目录，刻意在仓库之外。
+
+    它是 ``SandboxConfig`` 的字段而非到处硬编码的常量，是为了让**离线链路能把它
+    一起改写到临时目录**——SDK 替身不翻译沙箱绝对路径（见 ``tests/e2b_double.py``），
+    只改 ``repo_path`` 的话验收上传会写到宿主根目录去。上层若要拼相对路径，
+    请从本字段与 :attr:`repo_path` 现算，别写死 ``../acceptance``。
+    """
+
     metadata: Mapping[str, str] = field(default_factory=dict)
     """给沙箱打的元数据标签（E2B 控制面可见），便于对账与费用归因。"""
 
@@ -174,7 +190,8 @@ class SandboxBackend(BaseSandbox):
     销毁          ``kill()``（子类实现，必须幂等）+ ``__exit__`` 兜底
     ============  ==================================================
 
-    子类需要实现：``id`` / ``execute`` / ``upload_tree`` / ``download_files`` / ``kill``。
+    子类需要实现：``id`` / ``execute`` / ``execute_detached`` / ``upload_tree`` /
+    ``download_files`` / ``kill``。
     其余文件类操作由 ``BaseSandbox`` 从 ``execute`` 与 ``upload_files`` 派生。
 
     **``execute`` 的工作目录约定**：一律在 ``config.repo_path`` 下执行。刻意不提供
@@ -197,6 +214,53 @@ class SandboxBackend(BaseSandbox):
     def config(self) -> SandboxConfig:
         """本次创建的配置（只读，供日志与 checkpoint 记录）。"""
         return self._config
+
+    # ------------------------------------------------------------------ 执行
+    @abstractmethod
+    def execute_detached(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        """执行命令，**不假设仓库目录存在**（工作目录为沙箱默认目录）。
+
+        与 ``execute`` 的唯一差别是工作目录：``execute`` 固定在 ``config.repo_path``，
+        而它在**创建期还不存在**——建目录这一步本身、以及任何先于仓库落地的准备动作，
+        都只能走这条路径。两者的结果形态完全一致（同一个 ``ExecuteResponse`` 契约）。
+
+        Args:
+            command: 完整 shell 命令字符串。
+            timeout: 超时秒数；None 用 ``config.command_timeout_seconds``。0 表示不限制。
+        """
+
+    def ensure_dir(self, path: str) -> None:
+        """确保沙箱内 ``path`` 存在**且当前用户可写**，必要时提权兜底。
+
+        走 :meth:`execute_detached`（故可用于仓库目录自身）并放在接口层：上传代码与
+        上传验收文件都要先落地一个可写目录，重复写这套兜底逻辑只会让两边漂移。
+
+        两段式：常态路径是 ``mkdir -p`` 加一次可写性探测，**不碰 sudo**；只有目录
+        已存在却不可写、或根本建不出来时才提权（E2B 模板默认以非 root 用户执行，
+        而根下的 ``/workspace`` 归 root，见 ``E2BSandboxBackend._prepare_workspace``）。
+        ``install -d`` 而非 ``chown -R``：后者作用在父目录上，若 ``path`` 配成 ``/``
+        这类根下路径会改掉整个文件系统的属主。
+
+        Args:
+            path: 沙箱内目录的绝对路径。
+
+        Raises:
+            RuntimeError: 目录不可用（既无写权限、提权兜底也失败）。
+        """
+        quoted = shlex.quote(path)
+        # `{ ...; }` 分组保证优先级：(建目录且可写) 或 (提权建目录)。stderr 不重定向，
+        # 两条路径都失败时输出里能同时看到 mkdir 与 sudo 的原因。
+        command = (
+            f"{{ mkdir -p {quoted} && [ -w {quoted} ]; }} "
+            f'|| sudo -n install -d -o "$(id -u)" -g "$(id -g)" {quoted}'
+        )
+        result = self.execute_detached(command)
+        if result.exit_code != 0:
+            raise RuntimeError(
+                f"沙箱内目录不可用（{path}）：{result.output[:500]}\n"
+                "两种已知成因：沙箱用户无权在根下建目录，且镜像没有免密 sudo；"
+                "或该路径被一个不可写的文件占住了。"
+            )
 
     @property
     def is_alive(self) -> bool:

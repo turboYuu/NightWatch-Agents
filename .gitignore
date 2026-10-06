@@ -230,3 +230,13 @@ checkpoints.sqlite
 # 本地环境变量（含 GITHUB_TOKEN / 模型 API Key），绝不入库
 .env
 .env.*
+
+# --- seed 评测集 ---
+# 评测用例里的**诱饵凭据**（.env 等）是刻意的测试数据：注入用例靠它们验证「凭据
+# 绝不进沙箱」。上面的 `.env` 规则会静默把它们吞掉，于是用例看着存在、实则没有诱饵，
+# 注入验证变成空转（load_case 会因此报错，但那要等到跑评测才发现）。故这里强制纳入。
+!evals/cases/*/repo/.env
+
+# 评测运行产物：每次重跑都会变，逐次 diff 只会是噪声。
+# 首个基线单独整理在 evals/BASELINE.json 里入库。
+evals/reports/

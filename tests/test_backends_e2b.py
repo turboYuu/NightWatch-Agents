@@ -234,7 +234,8 @@ def test_prepare_workspace_escalates_when_dir_not_writable(tmp_path: Path) -> No
     setup = double.commands.calls[0]
     assert "[ -w" in setup, "应先用 [ -w ] 探测目录可写性"
     assert "sudo -n install -d" in setup, "不可写时应提权建目录并设属主"
-    assert "git --version" in setup, "git 探测不能丢"
+    # git 探测与建目录是**两条**命令：失败原因不同，分开才能各自给出可照做的诊断。
+    assert any("git --version" in call for call in double.commands.calls), "git 探测不能丢"
 
 
 def test_attach_kills_sandbox_when_workspace_prepare_fails(tmp_path: Path) -> None:
@@ -250,7 +251,7 @@ def test_attach_kills_sandbox_when_workspace_prepare_fails(tmp_path: Path) -> No
     config = SandboxConfig(repo_path=str(blocked / "repo"))
     double = SandboxDouble(tmp_path)
 
-    with pytest.raises(RuntimeError, match="沙箱环境准备失败"):
+    with pytest.raises(RuntimeError, match="沙箱内目录不可用"):
         E2BSandboxBackend._attach(config, double)
     assert double.kill_calls == 1
 

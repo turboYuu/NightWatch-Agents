@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import logging
-import shlex
 from typing import TYPE_CHECKING
 
 import e2b
@@ -161,12 +160,30 @@ class E2BSandboxBackend(SandboxBackend):
             ``ExecuteResponse``；非零退出码原样透传，超时为
             :data:`~nw_agent.backends.errors.TIMEOUT_EXIT_CODE`，其余远端错误为 1。
         """
+        return self._run(command, cwd=self._config.repo_path, timeout=timeout)
+
+    def execute_detached(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        """执行命令，不设工作目录（故不要求仓库目录已存在）。
+
+        建仓库目录那一步本身只能走这条——``cwd`` 指向一个尚不存在的目录时，E2B 会
+        直接拒绝执行。除工作目录外，行为与 :meth:`execute` 完全一致。
+        """
+        return self._run(command, cwd=None, timeout=timeout)
+
+    def _run(
+        self,
+        command: str,
+        *,
+        cwd: str | None,
+        timeout: int | None,
+    ) -> ExecuteResponse:
+        """``execute`` 与 :meth:`execute_detached` 的共同实现。"""
         self._require_alive()
         effective = self._config.command_timeout_seconds if timeout is None else timeout
         try:
             result = self._sandbox.commands.run(
                 command,
-                cwd=self._config.repo_path,
+                cwd=cwd,
                 envs=dict(self._config.envs) or None,
                 timeout=None if effective <= 0 else effective,
             )
@@ -280,43 +297,20 @@ class E2BSandboxBackend(SandboxBackend):
         直接失效；而 git 是基线提交与导出 diff 的前提，留到 ``upload_repo``
         才炸会白费一次代码上传。
 
-        **为什么要提权**：E2B 模板默认以非 root 用户 ``user``(uid 1000) 执行命令，
-        而官方 ``e2bdev/base`` 里既没有 ``/workspace`` 也不允许在根下创建目录
-        （``/`` 归 root）。于是裸 ``mkdir -p`` 必然 ``Permission denied``——这跟
-        「模板有没有装 git」无关，默认模板实测自带 git 2.39.5。镜像里给了 ``user``
-        免密 sudo（``/etc/sudoers.d``），故兜底走 ``sudo -n install -d -o/-g``：
-        一步建成目录并把属主设成当前用户，后续非 root 的上传与执行才能落进去。
-        常态（目录已存在且可写）不碰 sudo，零额外开销。
-
-        ``install -d`` 而非 ``sudo chown -R``：后者作用在父目录上，若 ``repo_path``
-        被配成 ``/repo`` 这类根下路径，``chown -R /`` 会改掉整个根文件系统的属主。
+        建目录（含「非 root 无权在根下建目录」的提权兜底）由接口层的
+        :meth:`SandboxBackend.ensure_dir` 承担——上传验收文件的评测链路要用同一套
+        兜底，放在接口层才不会两边漂移。
 
         Raises:
             RuntimeError: 镜像里没有 git，或目录建不出来（既无写权限、兜底也失败）。
         """
-        repo = shlex.quote(self._config.repo_path)
-        # `{ ...; }` 分组保证优先级：(建目录且可写) 或 (提权建目录)，两者都失败时
-        # `&&` 短路，命令以非零退出——不会被末尾的 `git --version` 盖掉退出码。
-        # stderr 不重定向：两条路径都失败时输出里能同时看到 mkdir 与 sudo 的原因。
-        setup = (
-            f"{{ mkdir -p {repo} && [ -w {repo} ]; }} "
-            f'|| sudo -n install -d -o "$(id -u)" -g "$(id -g)" {repo} '
-            f"&& git --version"
-        )
-        try:
-            result = self._sandbox.commands.run(
-                setup,
-                timeout=self._config.command_timeout_seconds,
-            )
-        except e2b.CommandExitException as exc:
-            raise RuntimeError(
-                f"沙箱环境准备失败（建 {self._config.repo_path} 并探测 git）："
-                f"{combine_output(exc.stdout, exc.stderr)[:500]}\n"
-                "两种已知成因：镜像里没有 git；或沙箱用户无权在根下建目录、"
-                "且没有免密 sudo。改装 git、或让镜像预建可写的工作目录"
-                "（见 doc/NightWatch产品说明.md 3.3 的沙箱预热）。"
-            ) from exc
+        self.ensure_dir(self._config.repo_path)
+        # 单独探测 git：它是基线提交与 diff 的前提，与建目录的失败原因不同，
+        # 故不放同一条命令里——分开才能给出各自的诊断。
+        result = self.execute_detached("git --version")
         if result.exit_code != 0:
             raise RuntimeError(
-                f"沙箱环境准备失败：{combine_output(result.stdout, result.stderr)[:500]}"
+                f"沙箱环境准备失败（探测 git）：{result.output[:500]}\n"
+                "已知成因：镜像里没有 git。请改装 git，或让镜像预装"
+                "（见 doc/NightWatch产品说明.md 3.3 的沙箱预热）。"
             )

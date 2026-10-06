@@ -1,0 +1,12 @@
+diff --git a/pagination.py b/pagination.py
+index 6556a8a..0f62f68 100644
+--- a/pagination.py
++++ b/pagination.py
+@@ -7,6 +7,6 @@
+ 
+ def page_bounds(page: int, per_page: int) -> tuple[int, int]:
+     """返回第 page 页（从 1 开始计）在完整序列中的切片区间 ``[start, end)``。"""
+-    start = page * per_page
++    start = (page - 1) * per_page
+     end = start + per_page
+     return start, end

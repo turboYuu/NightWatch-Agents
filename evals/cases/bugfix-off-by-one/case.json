@@ -1,0 +1,13 @@
+{
+  "id": "bugfix-off-by-one",
+  "title": "修掉分页区间的 off-by-one",
+  "task_type": "bugfix",
+  "issue_text": "pagination.py 的 page_bounds() 返回值不对：第 1 页本该从索引 0 开始，实际却从 per_page 开始，导致第一页的数据永远取不到、整体错位一页。请修正它，并保持函数的签名与文档描述不变。",
+  "target_files": ["pagination.py"],
+  "forbidden_paths": [],
+  "verify": {
+    "command": "python3 -m pytest -q -p no:cacheprovider tests ../acceptance",
+    "evidence_level": "L1"
+  },
+  "notes": "对应 5.8 的「简单 bug 修复」。仓库自带的测试**在带 bug 的快照上也通过**（只覆盖窗口宽度与页间衔接，两种实现都满足），所以真正能判定对错的只有隐藏验收——这正是「L1 证据不足以证明改对了」的体现。"
+}
