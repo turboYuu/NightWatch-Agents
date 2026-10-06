@@ -52,13 +52,16 @@ from nw_agent.backends import (  # noqa: E402
 )
 from nw_agent.evals import (  # noqa: E402
     BackendFactory,
+    CaseReport,
     NullSolver,
     ReferenceSolver,
     Solver,
+    build_report,
     iter_case_dirs,
     load_case,
-    run_suite,
+    run_case,
 )
+from nw_agent.observability import RunContext, configure_tracing  # noqa: E402
 
 # 与 bench_sandbox_cold_start.py 一致：允许把 E2B_API_KEY 放在仓库根的 .env 里
 # （该文件已被 .gitignore 覆盖）。必须在这里就加载——SDK 是在 create() 时才去读
@@ -147,6 +150,23 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"E2B 模板名（仅 --backend e2b 用；默认 {DEFAULT_TEMPLATE}，"
         "它是唯一预装了 pytest 的模板，用 E2B 默认模板会让验收因缺 pytest 而全红）",
     )
+    parser.add_argument(
+        "--home",
+        type=Path,
+        default=None,
+        help="运行产物与账本的根目录（默认 ~/.nightwatch，可用 NW_HOME 覆盖）",
+    )
+    parser.add_argument(
+        "--prices",
+        type=Path,
+        default=None,
+        help="模型单价表（默认 <home>/prices.json；不提供则费用恒为 null）",
+    )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="开启 LangSmith tracing（需 LANGSMITH_API_KEY；P0 无模型调用）",
+    )
     return parser
 
 
@@ -178,19 +198,43 @@ def main(argv: list[str] | None = None) -> int:
         print(f"⚠️ 将创建 {sandbox_count} 个真实云端沙箱并计费。")
     else:
         print("离线模式：注入 SDK 替身，不联网、不计费。")
+    # 只配置一次，把状态传给每条用例的运行上下文——重复调用没有额外效果，但会让
+    # 「请求开启」与「真的开启了」在打印里出现两次，容易看岔。
+    tracing = configure_tracing(args.trace)
+    print(f"tracing：{tracing.describe()}")
     print()
 
+    solver = solver_factory()
+    solver_name = type(solver).__name__
+    # 只有真链路关心模板；离线替身不认它，传 None 免得误导。
+    sandbox_config = SandboxConfig(template=args.template) if args.backend == "e2b" else None
+
+    reports: list[CaseReport] = []
+    contexts: list[RunContext] = []
     with tempfile.TemporaryDirectory(prefix="nw-eval-") as tmp:
         factory = make_e2b_factory() if args.backend == "e2b" else make_offline_factory(Path(tmp))
-        report = run_suite(
-            cases,
-            solver_factory(),
-            factory,
-            backend_kind=args.backend,
-            # 只有真链路关心模板；离线替身不认它，传 None 免得误导。
-            config=SandboxConfig(template=args.template) if args.backend == "e2b" else None,
-        )
+        for case in cases:
+            # 每条用例一个运行上下文：各自的 run_id、各自的产物目录。
+            # 不传 --home 时落在 ~/.nightwatch（可用 NW_HOME 覆盖）。
+            context = RunContext(
+                kind="eval",
+                home=args.home,
+                repo=None,  # 评测跑的是 fixture 快照，不是某个被维护的仓库
+                backend_kind=args.backend,
+                solver=solver_name,
+                case_id=case.case_id,
+                prices_path=args.prices,
+                tracing=tracing,
+            )
+            case_report = run_case(case, solver, factory, config=sandbox_config, recorder=context)
+            # 收尾用报告的 outcome：run 级结局只有调用方知道，runner 不越权代写。
+            context.finish(
+                case_report.outcome, error=case_report.error, escaped=case_report.escaped
+            )
+            reports.append(case_report)
+            contexts.append(context)
 
+    report = build_report(reports, backend_kind=args.backend, solver_name=solver_name)
     report["generated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     if args.json_out is not None:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
@@ -198,8 +242,11 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
     print_report(report)
+    if contexts:
+        print(f"\n运行产物已写入 {contexts[0].run_dir.parent}")
+        print(f"账本已追加 {len(contexts)} 行：{contexts[0].ledger_path}")
     if args.json_out is not None:
-        print(f"\n报告已写入 {args.json_out}")
+        print(f"报告已写入 {args.json_out}")
 
     summary = report["summary"]
     assert isinstance(summary, dict)  # 自家 run_suite 的形状，断言即是文档

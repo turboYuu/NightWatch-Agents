@@ -38,6 +38,8 @@ import argparse
 import sys
 from dataclasses import dataclass
 
+from nw_agent.observability import RunContext, TracingStatus, configure_tracing
+
 # 默认的 token 预算上限。夜间批量跑时，单任务失控烧钱是最贵的错误，
 # 因此给一个偏保守的默认值，可通过 --budget-tokens 覆盖。
 DEFAULT_TOKEN_BUDGET = 200_000
@@ -92,7 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="always",
         help="人工审核策略：always 强制人审（默认）/ auto 白名单免审 / never 全免",
     )
-    parser.add_argument("--trace", action="store_true", help="开启 tracing 或结构化 JSON 日志")
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="开启 LangSmith tracing 并落运行产物（P0 无模型调用，仅验证接线）",
+    )
     parser.add_argument(
         "--budget-tokens",
         type=int,
@@ -146,21 +152,59 @@ def main(argv: list[str] | None = None) -> int:
     P0 阶段仅回显解析结果；工作流留待后续阶段接入（届时在这里构造
     ``MaintenanceState`` 并驱动 LangGraph 状态图）。
 
+    ``--trace`` 已接线（不再只是回显）：它配置 LangSmith 并落一份运行产物。P0 没有
+    任何模型调用，所以 LangSmith 侧不会有数据——它能验证的是**接线**（开关、项目名、
+    账本与快照），不是「有 trace 可看」。详见 doc/可观测性.md。
+
     Returns:
         进程退出码；0 表示成功。
     """
     options = parse_args(argv)
 
-    # TODO(P1+): 用 options 初始化 MaintenanceState，编译并 invoke LangGraph 状态图。
+    # 抢在任何可能被 trace 的调用之前配置：langsmith 的 get_env_var 带 lru_cache，
+    # 晚设的环境变量可能被缓存屏蔽（见 observability/tracing.py 的顺序契约）。
+    tracing = configure_tracing(options.trace)
+
     print("nw-agent（P0 骨架）已解析参数：")
     print(f"  repo          = {options.repo}")
     print(f"  issue         = {options.issue}")
     print(f"  task          = {options.task}")
     print(f"  dry_run       = {options.dry_run}")
     print(f"  review        = {options.review}")
-    print(f"  trace         = {options.trace}")
+    print(f"  trace         = {options.trace}（tracing {tracing.describe()}）")
     print(f"  budget_tokens = {options.budget_tokens}")
+
+    # 运行产物只在 --trace 时落盘：P0 的 CLI 只是解析参数的骨架，没有产生任何真实
+    # 运行结果，默认写账本会把 5.7 的指标稀释成一堆无意义的行。
+    if options.trace:
+        _record_skeleton_run(options, tracing)
     return 0
+
+
+def _record_skeleton_run(options: CliOptions, tracing: TracingStatus) -> None:
+    """把这次「骨架运行」写进运行产物与账本（仅 ``--trace`` 时）。
+
+    ``outcome`` 记 ``skeleton`` 而非 ``success``：P0 什么都没做，用 success 会污染
+    5.7 的成功率。这条记录的价值在于证明链路通（快照里有完整的入参、账本里有 tracing
+    的真实状态），而不在于它「成功」了。
+    """
+    context = RunContext(kind="cli", repo=options.repo, tracing=tracing)
+    context.snapshot(
+        "cli-options",
+        {
+            "repo": options.repo,
+            "issue": options.issue,
+            "task": options.task,
+            "dry_run": options.dry_run,
+            "review": options.review,
+            "trace": options.trace,
+            "budget_tokens": options.budget_tokens,
+            "tracing": tracing.as_dict(),
+        },
+    )
+    context.finish("skeleton")
+    print(f"  运行产物      = {context.run_dir}")
+    print(f"  账本          = {context.ledger_path}")
 
 
 if __name__ == "__main__":

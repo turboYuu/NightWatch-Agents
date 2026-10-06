@@ -37,6 +37,7 @@ from nw_agent.evals import (
     run_case,
     run_suite,
 )
+from nw_agent.observability import RunContext, nw_home
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 CASES_DIR = _REPO_ROOT / "evals" / "cases"
@@ -265,6 +266,86 @@ def test_summary_reports_none_rate_when_there_is_no_case(tmp_path: Path) -> None
     assert summary["end_to_end_success_rate"] is None
     assert thresholds["end_to_end_success_rate"]["passed"] is False
     assert summary["escape_count"] == 0
+
+
+# ------------------------------------------------- 观测接缝（recorder）
+def test_running_a_suite_without_a_recorder_writes_nothing(tmp_path: Path) -> None:
+    """不传 recorder 就完全不落盘。
+
+    这是**类型级**保证（默认 no-op），不是「恰好 NW_HOME 指向临时目录」的环境巧合；
+    这条断言防的是日后有人把默认值改成一个会落盘的实现。
+    """
+    home = nw_home()
+    report = run_suite(
+        [_load("docstring-add")],
+        ReferenceSolver(),
+        offline_factory(tmp_path),
+        backend_kind="offline",
+    )
+    assert report["summary"]["total"] == 1  # type: ignore[index]
+    assert not home.exists(), "不传 recorder 时不该产生任何运行产物"
+
+
+def test_stages_are_reported_to_the_recorder(tmp_path: Path) -> None:
+    """四个阶段按顺序进运行上下文；run 级结局由调用方收尾。"""
+    context = RunContext(kind="eval", home=tmp_path / "obs", run_id="20260101T000000Z-stages")
+    report = run_case(
+        _load("docstring-add"),
+        ReferenceSolver(),
+        offline_factory(tmp_path),
+        recorder=context,
+    )
+    context.finish(report.outcome, error=report.error, escaped=report.escaped)
+
+    record = context.record
+    assert record is not None
+    assert [stage.name for stage in record.stages] == ["create", "upload", "solve", "verify"]
+    assert {stage.status for stage in record.stages} == {"ok"}
+    assert record.outcome == "success"
+    assert record.case_id is None  # run_case 不打标签，标签由脚本注入
+    assert record.total_tokens is None  # P0 无模型调用：None，不是 0
+
+
+def test_case_report_is_snapshotted_on_success(tmp_path: Path) -> None:
+    """用例结束时把最终状态写一份快照——P3 的图节点照此办理（节点退出即快照）。"""
+    context = RunContext(kind="eval", home=tmp_path / "obs", run_id="20260101T000000Z-snap")
+    run_case(
+        _load("docstring-add"),
+        ReferenceSolver(),
+        offline_factory(tmp_path),
+        recorder=context,
+    )
+    payload = json.loads(
+        (context.run_dir / "snapshots" / "01-case-report.json").read_text(encoding="utf-8")
+    )
+    assert payload["stage"] == "case-report"
+    assert payload["state"]["outcome"] == "success"
+    assert payload["state"]["changed_paths"] == ["calc.py"]
+
+
+def test_failing_stage_is_recorded_as_error_with_a_snapshot(tmp_path: Path) -> None:
+    """故障要能定位到**是哪一段**失败，而不是笼统一个 error。"""
+    broken = _copy_case(tmp_path / "cases", "docstring-add")
+    (broken / "reference.patch").unlink()  # ReferenceSolver 抛错 → harness 故障
+    context = RunContext(kind="eval", home=tmp_path / "obs", run_id="20260101T000000Z-err")
+
+    report = run_case(
+        load_case(broken),
+        ReferenceSolver(),
+        offline_factory(tmp_path / "sandboxes"),
+        recorder=context,
+    )
+    context.finish(report.outcome, error=report.error)
+
+    record = context.record
+    assert record is not None
+    assert record.outcome == "error"
+    assert [(stage.name, stage.status) for stage in record.stages] == [
+        ("create", "ok"),
+        ("upload", "ok"),
+        ("solve", "error"),
+    ]
+    assert (context.run_dir / "snapshots" / "01-error-solve.json").is_file()
 
 
 # ------------------------------------------------- 纯函数：凭据过滤
