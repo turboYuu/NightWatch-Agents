@@ -1,9 +1,7 @@
 # 项目元数据与工具配置（见 doc/NightWatch产品说明.md 第 5 章 P0）
 # 采用 src 布局：源码放 src/ 下，测试放 tests/，避免“测试时误导入工作目录版本”的经典坑。
 #
-# 本文件是依赖的**唯一声明来源**。conda-lock.yml 由它生成（见文件末尾 [tool.conda-lock]），
-# 不要手工改锁文件里的版本；增删依赖的完整流程见 doc/依赖管理.md。
-
+# 本文件是依赖的**唯一声明来源**。
 [build-system]
 # 选 hatchling 是因为配置少：不像 setuptools 那样需要另写包发现规则。
 requires = ["hatchling"]
@@ -47,7 +45,7 @@ dependencies = [
     "python-dotenv==1.2.1",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]           # 开发工具
 
 [project.scripts]
@@ -93,23 +91,3 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
 
-# ---------------------------------------------------------------------------
-# conda-lock：环境锁定
-# ---------------------------------------------------------------------------
-# 声明与锁定分离：本文件是唯一的依赖声明来源，`conda-lock lock` 据此生成
-# conda-lock.yml（精确版本，提交进仓库）。加了新依赖后重跑：
-#   conda run -n conda-lock conda-lock lock -f pyproject.toml
-# 安装（仓库根目录执行）：
-#   conda run -n conda-lock conda-lock install -n nightwatch_agents conda-lock.yml
-#   pip install -e . --no-deps        # 本地包单独装，不参与锁定
-#
-# 注：conda-lock 本身装在独立的 `conda-lock` 环境里——它依赖的 packaging /
-# requests / ruamel.yaml 版本与 conda 自身冲突，无法装进 base。
-[tool.conda-lock]
-channels = ["conda-forge"]
-platforms = ["osx-arm64", "linux-64"]
-default-non-conda-source = "pip"     # [project].dependencies 一律按 pip 依赖处理
-
-[tool.conda-lock.dependencies]       # 只有这里列出的走 conda
-python = "3.14"
-pip = "*"
