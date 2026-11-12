@@ -1,7 +1,6 @@
 """真链路自测：真模型 + 真 E2B 沙箱跑一次任务，断言产出非空补丁。
 
-    set -a; source .env; set +a          # 或直接 export
-    conda run -n nightwatch_agents pytest tests/test_agent_live.py -o addopts="" -s
+    uv run --env-file .env pytest tests/test_agent_live.py -o addopts="" -s
 
 **默认 skip**，与 ``test_backends_e2b.py`` 的真链路段同一姿态：本仓库的离线回归必须能在
 没有凭据的机器上全绿，CI 里这条应当是 skip 而不是 fail。
@@ -10,7 +9,7 @@
 
 ⚠️ **凭据必须真的在进程环境里**：``skipif`` 在 import 期求值，而 pytest **不会**加载
 ``.env``。把 key 只放在 ``.env`` 里会导致这条测试静默跳过（而不是报错）——这正是要用
-``source .env`` 的原因。
+``--env-file .env``（或先 ``source .env``）的原因。
 
 **不断言模型改对了**：那是评测集（``evals/``）的职责。这里只证明链路通——模型能通过
 ``task`` 委派、能在沙箱里动文件、补丁能被宿主导出来。真模型甚至可能不委派就直接用
@@ -44,7 +43,7 @@ _INITIAL = (
 def _write_fixture_repo(root: Path) -> Path:
     """现场造一个迷你仓库。
 
-    **刻意不用本仓库自身**：它太大（上传耗时不可控、还带 conda-lock 之类的无关文件），
+    **刻意不用本仓库自身**：它太大（上传耗时不可控、还带 uv.lock 之类的无关文件），
     且万一被改动会污染工作区。
     """
     (root / "tests").mkdir(parents=True, exist_ok=True)

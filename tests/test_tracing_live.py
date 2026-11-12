@@ -1,6 +1,6 @@
 """LangSmith 接线的**真链路**自测：默认 skip，有 key 时手动跑一次。
 
-    conda run -n nightwatch_agents pytest tests/test_tracing_live.py -o addopts="" -s
+    uv run --env-file .env pytest tests/test_tracing_live.py -o addopts="" -s
 
 与 ``tests/test_backends_e2b.py`` 的真链路段同一个姿态：CI（无 key）应当 skip 而不是
 fail——本仓库的离线回归必须能在没有凭据的机器上全绿。

@@ -86,8 +86,8 @@ files = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # 把 src/ 加入导入路径，使测试无需先安装包即可运行。
-# 副作用：pytest 通过**不能**证明 `pip install -e .` 装成功了——要验证安装是否可用，
-# 请改用 `nw-agent --help`（见 doc/依赖管理.md 的验证一节）。
+# 副作用：pytest 通过**不能**证明项目已正确安装——要验证 console script 是否可用，
+# 请改用 `uv run nw-agent --help`（见 doc/依赖管理.md 的验证一节）。
 pythonpath = ["src"]
 addopts = "-q"
 

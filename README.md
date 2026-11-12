@@ -18,7 +18,7 @@
 
 - 一个 [E2B](https://e2b.dev/) 账号的 API Key（真实跑任务需要创建远端沙箱）。
 - 一个模型 provider 的 API Key。默认示例使用 DeepSeek，即 `DEEPSEEK_API_KEY`；
-  换其他 provider 时，安装对应的 LangChain provider 包并设置其 Key。
+  换其他 provider 时，用 `uv add` 加入对应的 LangChain provider 包，并设置其 Key。
 
 ### 1. 克隆仓库
 
@@ -62,21 +62,29 @@ DEEPSEEK_API_KEY=你的 DeepSeek Key
 
 ```bash
 uv run nw-agent --help
-uv run pytest            # 未设置 E2B_API_KEY 时，E2B 相关用例会自动跳过
+uv run pytest            # 默认只跑离线用例；真链路用例在无 Key 时自动跳过
 ```
+
+> 注意计费：如果 shell 里已导出 `E2B_API_KEY` / `NW_MODEL_MAIN` 等变量，真链路用例会
+> 实际创建 E2B 沙箱并调用模型，产生费用。只想跑离线用例时，先确认这些变量未设置。
 
 ### 5. 运行
 
 先用 `--dry-run` 预演：只校验配置与将要上传的文件，**不建沙箱、不调模型、不花钱**。
+示例用一个很小的本地仓库——本仓库自身文件较多，真跑的上传耗时不可控：
 
 ```bash
-uv run nw-agent --repo . --task "给 src/nw_agent/cli/main.py 的 build_parser 补一段 docstring" --dry-run
+mkdir -p /tmp/demo-repo/tests
+printf 'def add(a, b):\n    return a + b\n' > /tmp/demo-repo/calc.py
+printf 'from calc import add\n\ndef test_add():\n    assert add(1, 2) == 3\n' > /tmp/demo-repo/tests/test_calc.py
+
+uv run nw-agent --repo /tmp/demo-repo --task "给 calc.py 的 add() 补一个中文 docstring" --dry-run
 ```
 
 确认无误后去掉 `--dry-run` 真跑：
 
 ```bash
-uv run nw-agent --repo . --task "给 src/nw_agent/cli/main.py 的 build_parser 补一段 docstring"
+uv run nw-agent --repo /tmp/demo-repo --task "给 calc.py 的 add() 补一个中文 docstring"
 ```
 
 跑完会在终端打印宿主侧导出的补丁。

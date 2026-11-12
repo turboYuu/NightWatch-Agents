@@ -7,7 +7,7 @@
   本地假沙箱后保住的回归——后端的行为不再靠「另一个无隔离实现」背书。
 - **在线段**（默认 skip）：真建云端沙箱，只在有 Key 的环境手动跑：
 
-      conda run -n nightwatch_agents pytest tests/test_backends_e2b.py -o addopts="" -s
+      uv run --env-file .env pytest tests/test_backends_e2b.py -o addopts="" -s
 
   它把「代码从没被执行过」和「代码跑过」区分开；没有它，后端就只能靠 lint 与类型
   检查背书。
